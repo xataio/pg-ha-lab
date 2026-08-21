@@ -79,11 +79,17 @@ stack::destroy() {
   kubectl -n "$NS" delete pvc -l cnpg.io/cluster="$CLUSTER" --ignore-not-found
 }
 
-# Dump the final content of the write table (one id per line) via the
-# current primary, bypassing services.
+# Dump the final content of the write table (one id per line), bypassing
+# services. Prefer the current primary; fall back to any instance that
+# answers (a wedged failover must not void the durability check).
 stack::dump_final_ids() { # <outfile>
-  local primary
-  primary=$(stack::primary_pod)
-  kubectl -n "$NS" exec "$primary" -c postgres -- \
-    psql -U postgres -d app -At -c "SELECT id FROM lab_writes ORDER BY id" > "$1"
+  local pod
+  for pod in $(stack::primary_pod) $(stack::instances | awk '{print $1}'); do
+    if kubectl -n "$NS" exec "$pod" -c postgres -- \
+        psql -U postgres -d app -At -c "SELECT id FROM lab_writes ORDER BY id" > "$1" 2>/dev/null; then
+      echo ">> final state dumped from $pod"
+      return 0
+    fi
+  done
+  return 1
 }

@@ -91,6 +91,9 @@ func connect(ctx context.Context, box *noticeBox) (*pgx.Conn, error) {
 	cfg.OnNotice = func(_ *pgconn.PgConn, n *pgconn.Notice) {
 		box.mu.Lock()
 		box.last = n.Severity + ": " + n.Message
+		if n.Detail != "" {
+			box.last += " DETAIL: " + n.Detail
+		}
 		box.mu.Unlock()
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -221,9 +224,11 @@ func logWrite(seq int64, r opResult, box *noticeBox, start time.Time, afterCance
 	rec := record{Client: *clientID, Mode: *mode, Op: "write", Seq: &seq,
 		Server: r.server, Warning: warn, Ms: ms(start)}
 	switch {
-	case r.err == nil && warn != "" && strings.Contains(warn, "committed locally"):
-		// success carrying the sync-replication cancellation warning:
-		// a pseudo-ack (PostgreSQL-inherent channel)
+	case r.err == nil && warn != "" && strings.Contains(warn, "synchronous replication"):
+		// success carrying the sync-replication cancellation warning
+		// ("canceling wait for synchronous replication ..."): a pseudo-ack
+		// (PostgreSQL-inherent channel). The "committed locally" phrase is
+		// in the DETAIL, which not every path includes — match the message.
 		rec.Result = "ok_warning"
 	case r.err == nil:
 		rec.Result = "ok"

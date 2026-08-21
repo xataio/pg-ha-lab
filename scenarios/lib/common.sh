@@ -25,6 +25,21 @@ scenario::init() { # <scenario-name>
   echo ">> run: $RUN_DIR"
   # never leave a partition behind, even if this supervisor is killed
   trap '"$ROOT/nemesis/partition.sh" heal >/dev/null 2>&1 || true' EXIT TERM INT
+  scenario::preflight_disk
+}
+
+# A full node disk produces kubelet evictions and CNPG low-disk shutdowns
+# that masquerade as stack behavior (learned the hard way). Refuse to run.
+scenario::preflight_disk() {
+  local n usage
+  for n in $(docker ps --format '{{.Names}}' | grep "^${KIND_NAME}-"); do
+    usage=$(docker exec "$n" df -P / | awk 'NR==2 {gsub("%","",$5); print $5}')
+    if (( usage >= 90 )); then
+      echo "!! ABORT: $n disk ${usage}% full — results would be contaminated" >&2
+      echo "   (kubelet disk-pressure evictions + CNPG low-disk shutdowns)" >&2
+      exit 1
+    fi
+  done
   echo "{\"event\":\"scenario_start\",\"t\":\"$(ts)\",\"scenario\":\"$SCENARIO_NAME\",\"stack\":\"$LAB_STACK\"}" \
     > "$RUN_DIR/events.jsonl"
 }
