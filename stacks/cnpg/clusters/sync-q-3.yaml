@@ -1,0 +1,25 @@
+# Strongest 3-node CNPG config: sync any/1, required durability, failoverQuorum.
+# Design claim under test: no clean-acked write can ever be lost; promotion is
+# refused whenever the sync member cannot be proven reachable (R+W>N).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pglab
+spec:
+  instances: 3
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+  storage:
+    size: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

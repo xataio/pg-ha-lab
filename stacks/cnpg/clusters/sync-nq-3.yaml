@@ -1,0 +1,24 @@
+# Synchronous replication (new API), required durability, NO failover quorum.
+# Expected exposure: the operator may promote the non-sync replica while the
+# sync standby is unreachable -> acked-write loss possible (geometry-dependent).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pglab
+spec:
+  instances: 3
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+  storage:
+    size: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

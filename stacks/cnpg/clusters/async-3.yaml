@@ -1,0 +1,20 @@
+# Baseline: CNPG defaults, no synchronous replication.
+# This is the configuration from cloudnative-pg#7407; acked-write loss on a
+# partitioned primary is the *expected*, documented behavior here, and the
+# harness must detect it (validation of the checker).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pglab
+spec:
+  instances: 3
+  storage:
+    size: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

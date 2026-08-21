@@ -1,0 +1,27 @@
+# Strongest 5-node CNPG config: sync any/2, required durability, failoverQuorum.
+# The asymmetric partition {primary, one replica} | {rest + control plane}
+# should: block clean acks on the old primary immediately (needs 2 acks),
+# allow promotion on the majority side (R=3, W=2, N=4), and leave the old
+# primary as an unfenced zombie until heal (measured, not judged).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pglab
+spec:
+  instances: 5
+  postgresql:
+    synchronous:
+      method: any
+      number: 2
+      dataDurability: required
+      failoverQuorum: true
+  storage:
+    size: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

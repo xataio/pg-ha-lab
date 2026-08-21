@@ -1,0 +1,107 @@
+# pg-ha-lab
+
+A Jepsen-style torture lab for PostgreSQL HA operators on Kubernetes.
+
+The lab injects network partitions (and other faults) into a kind cluster
+running a managed PostgreSQL setup, drives client workloads from *inside* each
+partition, records a full operation history, and checks invariants after the
+fault heals. It is **not** built to prove a predetermined point about any
+stack: the checker asserts a small set of invariants, everything else is
+measured and reported neutrally so trade-offs (availability vs. consistency
+posture, anomaly-window durations) emerge from data.
+
+Current target: **CloudNativePG**. The stack interface is deliberately thin so
+Patroni (and others) can be added later for side-by-side comparison — see
+`stacks/patroni/README.md`.
+
+## Invariants checked
+
+1. **Durability of clean acks** — every write acknowledged without warnings at
+   `synchronous_commit=on` must be present exactly once in the final state.
+   A violation here is a bug in the stack under test (or in PostgreSQL).
+2. **Single acker** — no two servers may acknowledge clean writes
+   concurrently (checked from history overlap per server identity).
+
+Everything else is *measured*, not judged:
+
+- pseudo-acks: `COMMIT` successes carrying the "already committed locally"
+  warning after a cancelled sync-replication wait (a PostgreSQL-inherent
+  channel, bucketed separately so it is never conflated with operator bugs);
+- indeterminate ops (connection lost / hung commit abandoned);
+- per-partition-side availability over time;
+- zombie window: how long a deposed primary keeps serving after a new one
+  is promoted;
+- doomed reads: reads observing data that does not survive the heal.
+
+## Layout
+
+```
+kind/            kind cluster topology (1 control-plane + 5 workers)
+stacks/cnpg/     CNPG install, cluster configs (the test matrix), adapter lib
+stacks/patroni/  placeholder + adapter contract for future comparison
+nemesis/         fault injectors: pairwise iptables partitions, pauses
+harness/client/  Go workload client (clean writer / cancel writer / reader)
+scenarios/       runnable end-to-end scenarios (deploy → fault → heal → check)
+checker/         history + final-state invariant checker and report
+results/         one directory per run (gitignored)
+```
+
+## Test matrix (CNPG)
+
+| config | file | description |
+|---|---|---|
+| async-3   | `stacks/cnpg/clusters/async-3.yaml`   | 3 instances, defaults (async) — the #7407 baseline |
+| sync-nq-3 | `stacks/cnpg/clusters/sync-nq-3.yaml` | sync `any/1`, `required`, **no** failoverQuorum |
+| sync-q-3  | `stacks/cnpg/clusters/sync-q-3.yaml`  | sync `any/1`, `required`, failoverQuorum |
+| sync-nq-5 | `stacks/cnpg/clusters/sync-nq-5.yaml` | 5 instances, sync `any/2`, no failoverQuorum |
+| sync-q-5  | `stacks/cnpg/clusters/sync-q-5.yaml`  | 5 instances, sync `any/2`, failoverQuorum |
+
+## Quickstart
+
+```sh
+make cluster-up          # kind cluster (6 nodes)
+make cnpg-install        # pinned CNPG operator
+make client-image        # build + load the workload client image
+make run SCENARIO=s01-async-baseline    # reproduce the known async loss (harness validation)
+make run SCENARIO=s02-sync-q-asym-3     # 3-node asymmetric partition, strongest config
+make run SCENARIO=s03-sync-q-asym-5     # 5-node asymmetric partition, strongest config
+make check RUN=results/<run-id>         # (re-)run the checker on a collected run
+make cluster-down
+```
+
+`s01` doubles as harness validation: it must detect lost acknowledged writes
+on the async baseline (the original cloudnative-pg#7407 behavior). A checker
+that has never seen a positive proves nothing.
+
+## Fault vocabulary (nemesis/)
+
+- `partition.sh apply "<groupA>" "<groupB>" [--one-way]` — pairwise iptables
+  DROP between two node groups (node IPs + pod CIDRs), arbitrary geometries
+  including asymmetric; `partition.sh heal` removes everything.
+- `pause.sh node <node> [resume]` — freeze/unfreeze an entire kind node
+  (docker pause), a coarse process-pause nemesis.
+
+Planned: partition during sync-config change, SIGSTOP of the instance
+manager only, lossy links (tc netem), replica destroy-and-recreate during
+partition, flapping partitions.
+
+## Scenario anatomy
+
+Each scenario script: deploys a cluster config, waits healthy, starts client
+pods pinned to each worker (writers + readers, connecting through the `-rw`
+service so stale kube-proxy routing is part of the experiment), records a
+baseline, applies a fault at `t0`, holds it, heals, waits for convergence,
+collects everything (client histories from pod logs, operator logs, events,
+final table dump), then runs the checker.
+
+## History format
+
+One JSON object per line, per client (from pod logs):
+
+```json
+{"t":"2026-08-21T12:00:00.123Z","client":"clean-w2","mode":"clean","op":"write",
+ "seq":412,"result":"ok","server":"10.244.3.5","ms":12.3}
+```
+
+`result` ∈ `ok | ok_warning | fail | info | late_ok`; `server` is
+`inet_server_addr()` reported by the acking backend on the same round trip.
