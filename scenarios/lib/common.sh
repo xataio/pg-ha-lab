@@ -7,14 +7,15 @@
 #   scenario::finish            -> checker + summary
 set -euo pipefail
 
-STACK="${STACK:-cnpg}"
+# LAB_STACK, not STACK: some environments export STACK for their own purposes
+LAB_STACK="${LAB_STACK:-cnpg}"
 NS="${NS:-pglab}"
 KIND_NAME="${KIND_NAME:-pg-ha-lab}"
 CLIENT_IMAGE="${CLIENT_IMAGE:-pg-ha-lab-client:dev}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # shellcheck source=/dev/null
-source "$ROOT/stacks/$STACK/lib.sh"
+source "$ROOT/stacks/$LAB_STACK/lib.sh"
 
 scenario::init() { # <scenario-name>
   SCENARIO_NAME="$1"
@@ -22,7 +23,7 @@ scenario::init() { # <scenario-name>
   RUN_DIR="$ROOT/results/$RUN_ID"
   mkdir -p "$RUN_DIR/history" "$RUN_DIR/stack"
   echo ">> run: $RUN_DIR"
-  echo "{\"event\":\"scenario_start\",\"t\":\"$(ts)\",\"scenario\":\"$SCENARIO_NAME\",\"stack\":\"$STACK\"}" \
+  echo "{\"event\":\"scenario_start\",\"t\":\"$(ts)\",\"scenario\":\"$SCENARIO_NAME\",\"stack\":\"$LAB_STACK\"}" \
     > "$RUN_DIR/events.jsonl"
 }
 
@@ -44,6 +45,8 @@ all_node_shorts() {
 # that hosts an instance. All connect through the -rw service, so stale
 # kube-proxy routing inside a partition is part of the experiment.
 scenario::start_clients() {
+  # make sure leftovers from a previous run are fully gone first
+  kubectl -n "$NS" delete pods -l app=pglab-client --ignore-not-found --wait=true
   local secret host
   secret=$(stack::app_secret)
   host=$(stack::rw_service)

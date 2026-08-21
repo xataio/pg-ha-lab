@@ -15,12 +15,17 @@
 #
 # --one-way: only group A drops traffic *coming from* group B (A is deaf to
 # B; B still hears A). Default is a symmetric cut, applied on both sides.
+#
+# The cut is applied with ONE docker exec per node (all rules in a single
+# shell), so it lands near-atomically; apply_start/apply_end timestamps are
+# both emitted for the checker.
 set -euo pipefail
 
 KIND_NAME="${KIND_NAME:-pg-ha-lab}"
 CHAIN="PGLAB"
 
 node_container() { echo "${KIND_NAME}-$1"; }
+ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 node_ip() { # <shortname>
   docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
@@ -31,29 +36,27 @@ pod_cidr() { # <shortname>
   kubectl get node "$(node_container "$1")" -o jsonpath='{.spec.podCIDR}'
 }
 
-ensure_chain() { # <shortname>
-  local c; c=$(node_container "$1")
-  docker exec "$c" iptables -N "$CHAIN" 2>/dev/null || true
-  for hook in INPUT OUTPUT FORWARD; do
-    docker exec "$c" iptables -C "$hook" -j "$CHAIN" 2>/dev/null \
-      || docker exec "$c" iptables -I "$hook" -j "$CHAIN"
-  done
+lookup() { # <shortname> -> "ip cidr" from the pre-resolved table
+  awk -v n="$1" '$1==n{print $2, $3}' "$INFO"
 }
 
-# On node $1, drop all traffic to/from node $2 (or only from, if one-way).
-block() { # <on> <peer> <mode:both|from>
-  local on="$1" peer="$2" mode="$3"
-  local c ip cidr
-  c=$(node_container "$on")
-  ip=$(node_ip "$peer")
-  cidr=$(pod_cidr "$peer")
-  ensure_chain "$on"
-  docker exec "$c" iptables -A "$CHAIN" -s "$ip" -j DROP
-  docker exec "$c" iptables -A "$CHAIN" -s "$cidr" -j DROP
-  if [[ "$mode" == "both" ]]; then
-    docker exec "$c" iptables -A "$CHAIN" -d "$ip" -j DROP
-    docker exec "$c" iptables -A "$CHAIN" -d "$cidr" -j DROP
-  fi
+# Emit the full iptables script for <node>, dropping traffic from (and, for
+# mode=both, to) every peer in $2 (space-separated shortnames).
+node_script() { # <node> <peers...> <mode:both|from>
+  local node="$1" peers="$2" mode="$3" ip cidr
+  echo "iptables -N $CHAIN 2>/dev/null || true"
+  for hook in INPUT OUTPUT FORWARD; do
+    echo "iptables -C $hook -j $CHAIN 2>/dev/null || iptables -I $hook -j $CHAIN"
+  done
+  for p in $peers; do
+    read -r ip cidr < <(lookup "$p")
+    echo "iptables -A $CHAIN -s $ip -j DROP"
+    echo "iptables -A $CHAIN -s $cidr -j DROP"
+    if [[ "$mode" == "both" ]]; then
+      echo "iptables -A $CHAIN -d $ip -j DROP"
+      echo "iptables -A $CHAIN -d $cidr -j DROP"
+    fi
+  done
 }
 
 all_nodes() {
@@ -69,37 +72,41 @@ case "$cmd" in
     [[ "${4:-}" == "--one-way" ]] && mode="one-way"
     IFS=',' read -ra A <<< "$groupA"
     IFS=',' read -ra B <<< "$groupB"
-    t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    for a in "${A[@]}"; do
-      for b in "${B[@]}"; do
-        if [[ "$mode" == "both" ]]; then
-          block "$a" "$b" both
-          block "$b" "$a" both
-        else
-          # A drops incoming from B only
-          block "$a" "$b" from
-        fi
-      done
+
+    # pre-resolve all IPs/CIDRs so the cut itself is tight
+    INFO=$(mktemp)
+    trap 'rm -f "$INFO"' EXIT
+    for n in "${A[@]}" "${B[@]}"; do
+      echo "$n $(node_ip "$n") $(pod_cidr "$n")" >> "$INFO"
     done
-    echo "{\"event\":\"partition_apply\",\"t\":\"$t0\",\"groupA\":\"$groupA\",\"groupB\":\"$groupB\",\"mode\":\"$mode\"}"
+
+    echo "{\"event\":\"partition_apply_start\",\"t\":\"$(ts)\",\"groupA\":\"$groupA\",\"groupB\":\"$groupB\",\"mode\":\"$mode\"}"
+    for a in "${A[@]}"; do
+      node_script "$a" "${B[*]}" "$([[ $mode == both ]] && echo both || echo from)" \
+        | docker exec -i "$(node_container "$a")" sh -e
+    done
+    if [[ "$mode" == "both" ]]; then
+      for b in "${B[@]}"; do
+        node_script "$b" "${A[*]}" both \
+          | docker exec -i "$(node_container "$b")" sh -e
+      done
+    fi
+    echo "{\"event\":\"partition_apply\",\"t\":\"$(ts)\",\"groupA\":\"$groupA\",\"groupB\":\"$groupB\",\"mode\":\"$mode\"}"
     ;;
   heal)
-    t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     for n in $(all_nodes); do
-      c=$(node_container "$n")
-      docker exec "$c" iptables -F "$CHAIN" 2>/dev/null || true
+      docker exec "$(node_container "$n")" iptables -F "$CHAIN" 2>/dev/null || true
     done
-    echo "{\"event\":\"partition_heal\",\"t\":\"$t0\"}"
+    echo "{\"event\":\"partition_heal\",\"t\":\"$(ts)\"}"
     ;;
   status)
     for n in $(all_nodes); do
-      c=$(node_container "$n")
-      echo "== $c"
-      docker exec "$c" iptables -S "$CHAIN" 2>/dev/null || echo "  (no chain)"
+      echo "== $(node_container "$n")"
+      docker exec "$(node_container "$n")" iptables -S "$CHAIN" 2>/dev/null || echo "  (no chain)"
     done
     ;;
   *)
-    grep '^#' "$0" | head -20
+    grep '^#' "$0" | head -22
     exit 1
     ;;
 esac
