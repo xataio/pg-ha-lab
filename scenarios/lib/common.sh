@@ -23,6 +23,8 @@ scenario::init() { # <scenario-name>
   RUN_DIR="$ROOT/results/$RUN_ID"
   mkdir -p "$RUN_DIR/history" "$RUN_DIR/stack"
   echo ">> run: $RUN_DIR"
+  # never leave a partition behind, even if this supervisor is killed
+  trap '"$ROOT/nemesis/partition.sh" heal >/dev/null 2>&1 || true' EXIT TERM INT
   echo "{\"event\":\"scenario_start\",\"t\":\"$(ts)\",\"scenario\":\"$SCENARIO_NAME\",\"stack\":\"$LAB_STACK\"}" \
     > "$RUN_DIR/events.jsonl"
 }
