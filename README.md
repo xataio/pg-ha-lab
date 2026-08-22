@@ -2,6 +2,8 @@
 
 A Jepsen-style torture lab for PostgreSQL HA operators on Kubernetes.
 
+**Measured results, per-scenario diagrams and findings: [RESULTS.md](RESULTS.md).**
+
 The lab injects network partitions (and other faults) into a kind cluster
 running a managed PostgreSQL setup, drives client workloads from *inside* each
 partition, records a full operation history, and checks invariants after the
@@ -24,14 +26,18 @@ Patroni (and others) can be added later for side-by-side comparison — see
 
 Everything else is *measured*, not judged:
 
-- pseudo-acks: `COMMIT` successes carrying the "already committed locally"
-  warning after a cancelled sync-replication wait (a PostgreSQL-inherent
-  channel, bucketed separately so it is never conflated with operator bugs);
+- cancelled-sync commits: `COMMIT` successes carrying the "already committed
+  locally" warning after a cancelled sync-replication wait — acknowledged to
+  the client with local-only durability (a PostgreSQL-inherent channel,
+  bucketed separately so it is never conflated with operator bugs); reported
+  as kept vs erased depending on whether the row survives recovery;
 - indeterminate ops (connection lost / hung commit abandoned);
-- per-partition-side availability over time;
-- zombie window: how long a deposed primary keeps serving after a new one
-  is promoted;
-- doomed reads: reads observing data that does not survive the heal.
+- write-availability gaps: periods with no acknowledged write from any
+  server, with offsets relative to the fault and as % of fault duration;
+- old primary serving after takeover: how long the deposed primary keeps
+  answering clients after the new primary starts acknowledging writes;
+- reads of erased writes: reads observing data that does not survive
+  recovery (Adya G1a-like "aborted reads").
 
 ## Layout
 
