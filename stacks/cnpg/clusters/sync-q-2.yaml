@@ -1,0 +1,27 @@
+# Two-node cluster, sync any/1, required durability, failoverQuorum.
+# The CP-extreme corner of the matrix: every clean ack is on both nodes, so
+# no failover can ever lose one — but ANY single-node loss stops writes,
+# and after promoting the survivor, writes stay blocked until the old
+# primary rejoins as a replica (its only possible sync standby).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pglab
+spec:
+  instances: 2
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+  storage:
+    size: 1Gi
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi

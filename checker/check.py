@@ -91,17 +91,33 @@ def main(run_dir):
     for w in buckets["ok"]:
         if w.get("server"):
             acks_by_server[w["server"]].append(parse_t(w["t"]))
+
+    # ack segments per server (>10s silence starts a new segment) — a plain
+    # min/max span hides service gaps (e.g. fenced then resumed post-heal)
+    def segments(ts, gap=10.0):
+        ts = sorted(ts)
+        segs = [[ts[0], ts[0]]]
+        for t in ts[1:]:
+            if (t - segs[-1][1]).total_seconds() > gap:
+                segs.append([t, t])
+            else:
+                segs[-1][1] = t
+        return segs
+
+    segs_by_server = {s: segments(ts) for s, ts in acks_by_server.items()}
     spans = {s: (min(ts), max(ts)) for s, ts in acks_by_server.items()}
     servers = sorted(spans, key=lambda s: spans[s][0])
     overlaps = []
     for i, a in enumerate(servers):
         for b in servers[i + 1:]:
-            start = max(spans[a][0], spans[b][0])
-            end = min(spans[a][1], spans[b][1])
-            if end > start:
-                overlaps.append((a, b, (end - start).total_seconds()))
+            for sa in segs_by_server[a]:
+                for sb in segs_by_server[b]:
+                    start = max(sa[0], sb[0])
+                    end = min(sa[1], sb[1])
+                    if end > start:
+                        overlaps.append((a, b, (end - start).total_seconds()))
     for a, b, secs in overlaps:
-        violations.append(f"I2 SINGLE-ACKER: {a} and {b} clean-ack intervals overlap by {secs:.1f}s")
+        violations.append(f"I2 SINGLE-ACKER: {a} and {b} clean-ack segments overlap by {secs:.1f}s")
 
     # ---- measurements ------------------------------------------------------
     lost_warn = [w for w in buckets["ok_warning"] if final_ids and wid(w) not in final_ids]
@@ -120,8 +136,35 @@ def main(run_dir):
     doomed_reads = []
     for r in reads:
         for client, hwm in (r.get("observed") or {}).items():
-            if final_ids and f"{client}-{hwm}" not in final_ids and hwm > final_hwm[client]:
+            # a read observed a row that does not exist in the final state —
+            # mid-sequence holes count too (the writer may have continued on
+            # the new primary, pushing the final high-water mark past the
+            # doomed id), so do NOT gate this on hwm > final_hwm
+            if final_ids and f"{client}-{hwm}" not in final_ids:
                 doomed_reads.append((r["t"], r["client"], r.get("server", "?"), client, hwm))
+
+    # write-availability gaps: periods with no clean ack from ANY server —
+    # the cluster-wide write outage windows, annotated against the fault
+    # timeline (partition_apply / partition_heal events)
+    anchors = {}
+    for e in events:
+        if e.get("event") in ("partition_apply", "partition_heal") and e.get("t"):
+            anchors.setdefault(e["event"], parse_t(e["t"]))
+
+    def rel(t, anchor_name, label):
+        at = anchors.get(anchor_name)
+        if at is None:
+            return ""
+        delta = (t - at).total_seconds()
+        sign = "+" if delta >= 0 else "-"
+        return f"{label}{sign}{abs(delta):.0f}s"
+
+    availability_gaps = []
+    all_ack_ts = sorted(t for ts in acks_by_server.values() for t in ts)
+    if all_ack_ts:
+        merged = segments(all_ack_ts)
+        for prev, nxt in zip(merged, merged[1:]):
+            availability_gaps.append((prev[1], nxt[0], (nxt[0] - prev[1]).total_seconds()))
 
     # zombie window: for each later-acking server, how long the earlier
     # server kept answering (acks or reads) after the later one's first ack
@@ -155,27 +198,46 @@ def main(run_dir):
     print(f"   reads:  ok={sum(1 for r in reads if r.get('result') == 'ok')} "
           f"fail={sum(1 for r in reads if r.get('result') == 'fail')}")
     print()
-    print("-- clean-ack spans per server (I2 evidence)")
+    print("-- clean-ack segments per server (I2 evidence; >10s silence splits)")
     for s in servers:
-        f_, l_ = spans[s]
-        print(f"   {s}: {f_.time()} .. {l_.time()}  ({len(acks_by_server[s])} acks)")
+        print(f"   {s}: {len(acks_by_server[s])} acks in {len(segs_by_server[s])} segment(s)")
+        for a, b in segs_by_server[s]:
+            print(f"      {a.time()} .. {b.time()}  ({(b - a).total_seconds():.0f}s)")
     print()
     print("-- measurements (reported, not judged)")
-    print(f"   pseudo-acks (cancelled sync wait, PG-inherent): "
-          f"{len(kept_warn)} survived, {len(lost_warn)} lost")
-    print(f"   indeterminate writes: {len(kept_info)} survived, {len(lost_info)} lost")
+    print(f"   cancelled-sync commits (acked with warning, local-only durability; "
+          f"PG-inherent): kept {len(kept_warn)}, erased {len(lost_warn)}")
+    print(f"   indeterminate writes: kept {len(kept_info)}, erased {len(lost_info)}")
+    if availability_gaps:
+        fault_len = None
+        if "partition_apply" in anchors and "partition_heal" in anchors:
+            fault_len = (anchors["partition_heal"] - anchors["partition_apply"]).total_seconds()
+        print("   write-availability gaps (no clean acks from any server, >10s):")
+        for a, b, secs in availability_gaps:
+            marks = " ".join(x for x in (rel(a, "partition_apply", "cut"),
+                                         rel(b, "partition_heal", "heal")) if x)
+            pct = f" = {100 * secs / fault_len:.0f}% of fault duration" if fault_len else ""
+            print(f"      {a.time()} .. {b.time()}  ({secs:.0f}s)  [{marks}]{pct}")
+    else:
+        print("   write-availability gaps: none (some server acked throughout)")
     if zombie:
         for old, new, secs in zombie:
-            print(f"   zombie window: {old} still answering {secs:.1f}s after {new} began acking")
+            print(f"   old primary serving after takeover: {old} answered for "
+                  f"{secs:.1f}s after {new} began acking")
     else:
-        print("   zombie window: n/a (no second acking server observed)")
+        print("   old primary serving after takeover: n/a (no takeover observed)")
     if doomed_reads:
         first, last = doomed_reads[0], doomed_reads[-1]
-        print(f"   doomed reads: {len(doomed_reads)} observations "
+        print(f"   reads of erased writes (G1a-like): {len(doomed_reads)} observations "
               f"(first {first[0]} by {first[1]}, last {last[0]})")
     else:
-        print("   doomed reads: none observed")
+        print("   reads of erased writes: none observed")
     print()
+    if lost_clean:
+        lost_file = run_dir / "lost_clean_acks.txt"
+        with lost_file.open("w") as fh:
+            for w in sorted(lost_clean, key=lambda w: w["t"]):
+                fh.write(f"{w['t']} {wid(w)} server={w.get('server','?')} client={w['client']}\n")
     if violations:
         print("!! INVARIANT VIOLATIONS")
         for v in violations:
@@ -183,7 +245,7 @@ def main(run_dir):
         for w in lost_clean[:10]:
             print(f"     lost clean ack: {wid(w)} acked by {w.get('server','?')} at {w['t']}")
         if len(lost_clean) > 10:
-            print(f"     ... and {len(lost_clean) - 10} more")
+            print(f"     ... and {len(lost_clean) - 10} more (full list: {lost_file})")
         return 1
     print("ok: no invariant violations")
     return 0

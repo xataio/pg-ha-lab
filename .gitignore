@@ -1,2 +1,3 @@
 results/
 harness/client/client
+__pycache__/

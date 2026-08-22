@@ -7,7 +7,7 @@
 set -euo pipefail
 source "$(dirname "$0")/lib/common.sh"
 
-HOLD="${HOLD:-600}"
+HOLD="${HOLD:-300}"
 scenario::init s02-sync-q-asym-3
 
 stack::destroy || true

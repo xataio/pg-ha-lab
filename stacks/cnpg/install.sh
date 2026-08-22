@@ -2,6 +2,10 @@
 # Install a pinned CloudNativePG operator version and wait for it to be ready.
 set -euo pipefail
 
+if [[ -z "${KUBECONFIG:-}" && -f "$HOME/.kube/pg-ha-lab.config" ]]; then
+  export KUBECONFIG="$HOME/.kube/pg-ha-lab.config"
+fi
+
 CNPG_VERSION="${CNPG_VERSION:-1.30.0}"
 RELEASE_BRANCH="release-$(echo "$CNPG_VERSION" | cut -d. -f1-2)"
 MANIFEST="https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml"
