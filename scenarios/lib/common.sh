@@ -11,6 +11,11 @@ set -euo pipefail
 LAB_STACK="${LAB_STACK:-cnpg}"
 NS="${NS:-pglab}"
 KIND_NAME="${KIND_NAME:-pg-ha-lab}"
+# use the lab's dedicated kubeconfig when present, so scenarios work
+# regardless of (and without touching) the user's current kubectl context
+if [[ -z "${KUBECONFIG:-}" && -f "$HOME/.kube/pg-ha-lab.config" ]]; then
+  export KUBECONFIG="$HOME/.kube/pg-ha-lab.config"
+fi
 CLIENT_IMAGE="${CLIENT_IMAGE:-pg-ha-lab-client:dev}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
