@@ -15,6 +15,7 @@ terminology; raw evidence for every run lives in `results/<run-id>/`.
 | s03 | sync any/2 + quorum | 0 | 0 | 30% `[cut+0 → promotion+91]` | healthy pattern; zombie 120s |
 | s04 | sync any/1, 2 nodes | 0 | 0 | 102% `[cut+0 → heal+6]` | structural: no writes without the peer |
 | s05 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | heal-time race; loss without split-brain |
+| s06 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race defanged by quorum + LSN selection |
 
 Recurring signatures across all runs: the primary-isolation fence SIGTERMs at
 ~cut+30s but established sessions keep operating until ~cut+210s (the 180s
@@ -199,6 +200,43 @@ via promote-past-unreachable-writes after the network is healthy again.
 
 ---
 
+## s06 — sync + quorum, operator trapped with the primary
+
+Config and fault: as s02, with the s05 twist — the single-replica operator
+re-pinned onto the primary's node before the cut. Tests whether the s05
+heal-time race can lose acked writes when sync replication + failoverQuorum
+are in play.
+
+```mermaid
+flowchart LR
+    subgraph iso["⚡ isolated zone"]
+        P[("pglab-1<br/>PRIMARY")]
+        R1[("sync standby<br/>(acking)")]
+        OP["operator<br/>(cannot reach API)"]
+        P -->|"WAL + sync ack"| R1
+    end
+    subgraph maj["majority zone"]
+        CP["control plane<br/>API server (no operator!)"]
+        R2[("replica (stale)")]
+    end
+    OP -. ✗ API .- CP
+    P -. ✗ .- R2
+    P -. ✗ .- CP
+```
+
+**Measured (n=4): zero loss in every run.** During the fault: identical to
+s02 (no promotion, fence at cut+207s). At heal the race went both ways —
+the primary resumed first in 3/4 runs (heal+4..5s); in 1/4 the returning
+operator won and **promoted at heal+16s, choosing the trapped sync standby**
+(most-advanced reachable, holding every acked commit) rather than the stale
+replica: zero acked writes lost, at the cost of ~11s extra outage and a
+rewind of the old primary's unacked tail. The s05 loss mechanism is
+defanged by sync+quorum: the quorum gate cannot pass against a partial
+post-heal view, and LSN-ordered candidate selection picks the node that
+acked. The heal-time race is therefore an async-only durability hazard.
+
+---
+
 ## Findings worth raising upstream
 
 1. **`smartShutdownTimeout` blunts every fencing path.** The isolation-check
@@ -222,4 +260,6 @@ via promote-past-unreachable-writes after the network is healthy again.
    regaining API access, racing the fenced primary's restart — losing acked
    writes ~2/3 of the time in our environment, without split-brain. A grace
    period for a returning `targetPrimary` (or `failoverDelay` applying at
-   heal) would close it.
+   heal) would close it. s06 shows sync + `failoverQuorum` defangs the same
+   race (n=4, zero loss, including one run where the operator won and
+   correctly promoted the sync standby) — the hazard is async-only.
