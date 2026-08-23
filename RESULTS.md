@@ -17,6 +17,9 @@ terminology; raw evidence for every run lives in `results/<run-id>/`.
 | s05 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | heal-time race; loss without split-brain |
 | s06 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race defanged by quorum + LSN selection |
 
+Patroni counterpart runs and the cross-stack comparison live in
+[RESULTS-PATRONI.md](RESULTS-PATRONI.md).
+
 Recurring signatures across all runs: the primary-isolation fence SIGTERMs at
 ~cut+30s but established sessions keep operating until ~cut+210s (the 180s
 `smartShutdownTimeout` smart-shutdown grace); promotion, where allowed, lands

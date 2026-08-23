@@ -11,7 +11,7 @@ HOLD="${HOLD:-300}"
 scenario::init s01-async-baseline
 
 stack::destroy || true
-stack::deploy "$ROOT/stacks/cnpg/clusters/async-3.yaml"
+stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/async-3.yaml"
 scenario::start_clients
 
 echo ">> baseline for 60s"

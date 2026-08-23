@@ -7,9 +7,13 @@ CLUSTER="${CLUSTER:-pglab}"
 
 # Deploy a cluster config and wait until it is healthy.
 stack::deploy() { # <path-to-cluster-yaml>
+  # cross-stack guard: a leftover Patroni statefulset would collide on names
+  kubectl -n "$NS" delete sts "$CLUSTER" --ignore-not-found --wait=true 2>/dev/null || true
   kubectl -n "$NS" apply -f "$1"
   stack::wait_healthy 600
 }
+
+stack::app_db() { echo "app"; }
 
 stack::wait_healthy() { # <timeout-seconds>
   local deadline=$(( $(date +%s) + $1 ))

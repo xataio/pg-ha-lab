@@ -112,7 +112,7 @@ spec:
         - name: PGPASSWORD
           valueFrom: {secretKeyRef: {name: $secret, key: password}}
         - name: PGDATABASE
-          value: app
+          value: $(stack::app_db)
 EOF
 }
 

@@ -2,7 +2,9 @@
 
 A Jepsen-style torture lab for PostgreSQL HA operators on Kubernetes.
 
-**Measured results, per-scenario diagrams and findings: [RESULTS.md](RESULTS.md).**
+**Measured results, per-scenario diagrams and findings: [RESULTS.md](RESULTS.md)
+(CNPG) and [RESULTS-PATRONI.md](RESULTS-PATRONI.md) (Patroni + cross-stack
+comparison).**
 
 The lab injects network partitions (and other faults) into a kind cluster
 running a managed PostgreSQL setup, drives client workloads from *inside* each

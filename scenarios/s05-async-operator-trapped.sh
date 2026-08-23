@@ -13,6 +13,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib/common.sh"
 
 HOLD="${HOLD:-300}"
+[[ "$LAB_STACK" == cnpg ]] || { echo "!! $0 is cnpg-only (it manipulates the cnpg operator deployment)"; exit 1; }
 scenario::init s05-async-operator-trapped
 
 # NOTE: strategic-merge patches MERGE map keys, so each pin must explicitly

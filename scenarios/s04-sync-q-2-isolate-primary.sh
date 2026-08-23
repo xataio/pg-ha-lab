@@ -14,7 +14,7 @@ HOLD="${HOLD:-300}"
 scenario::init s04-sync-q-2-isolate-primary
 
 stack::destroy || true
-stack::deploy "$ROOT/stacks/cnpg/clusters/sync-q-2.yaml"
+stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/sync-q-2.yaml"
 scenario::start_clients
 
 echo ">> baseline for 60s"

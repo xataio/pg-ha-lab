@@ -1,0 +1,168 @@
+# Patroni (Spilo) 3-node cluster, quorum synchronous replication + strict +
+# DCS failsafe — the counterpart of CNPG sync-q-3 (any/1, required,
+# failoverQuorum). Patroni's strongest posture. Raw Spilo StatefulSet, no Zalando operator: nothing fights
+# the chaos, and Patroni's own behavior is unmediated. DCS = Kubernetes
+# configmaps, so "partitioned from the API server" is the identical fault
+# for both stacks. Routing = label-selector service on spilo-role, the same
+# mechanism as CNPG's -rw service.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pglab-app
+type: Opaque
+stringData:
+  username: postgres
+  password: pglab-super-secret
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pglab-patroni
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pglab-patroni
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [""]
+    resources: [endpoints, services]
+    verbs: [get, list, watch, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pglab-patroni
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pglab-patroni
+subjects:
+  - kind: ServiceAccount
+    name: pglab-patroni
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pglab-headless
+spec:
+  clusterIP: None
+  selector:
+    application: spilo
+    cluster-name: pglab
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pglab-rw
+spec:
+  selector:
+    application: spilo
+    cluster-name: pglab
+    spilo-role: master
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pglab
+  labels:
+    application: spilo
+    cluster-name: pglab
+spec:
+  serviceName: pglab-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      application: spilo
+      cluster-name: pglab
+  template:
+    metadata:
+      labels:
+        application: spilo
+        cluster-name: pglab
+    spec:
+      serviceAccountName: pglab-patroni
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  application: spilo
+                  cluster-name: pglab
+      containers:
+        - name: spilo
+          image: ghcr.io/zalando/spilo-18:4.1-p2
+          ports:
+            - containerPort: 5432
+            - containerPort: 8008
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: 8008
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          env:
+            - name: SCOPE
+              value: pglab
+            - name: DCS_ENABLE_KUBERNETES_API
+              value: "true"
+            - name: KUBERNETES_USE_CONFIGMAPS
+              value: "true"
+            - name: KUBERNETES_SCOPE_LABEL
+              value: cluster-name
+            - name: KUBERNETES_ROLE_LABEL
+              value: spilo-role
+            - name: KUBERNETES_LABELS
+              value: '{"application":"spilo"}'
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: PGPASSWORD_SUPERUSER
+              valueFrom: {secretKeyRef: {name: pglab-app, key: password}}
+            - name: PGPASSWORD_STANDBY
+              value: pglab-standby-secret
+            - name: SPILO_CONFIGURATION
+              value: |
+                bootstrap:
+                  dcs:
+                    ttl: 30
+                    loop_wait: 10
+                    retry_timeout: 10
+                    synchronous_mode: quorum
+                    synchronous_node_count: 1
+                    synchronous_mode_strict: true
+                    failsafe_mode: true
+                postgresql:
+                  pg_hba:
+                    - local all all trust
+                    - local replication standby trust
+                    - host all all 0.0.0.0/0 md5
+                    - host replication standby 0.0.0.0/0 md5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /home/postgres/pgdata
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        labels:
+          application: spilo
+          cluster-name: pglab
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
