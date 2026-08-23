@@ -14,12 +14,36 @@ s04→sync03, s06→sync04.
 
 | Scenario | Config | Lost clean acks | Dual-ack overlap | Write outage (% of fault) | Notes |
 |---|---|---|---|---|---|
-| async01 | async, defaults | **~850** | **~130s** | 0% | availability preserved via split-brain |
-| async02 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | heal-time race; loss without split-brain |
-| sync01 | sync any/1 + quorum | 0 | 0 | 37% `[cut+213 → heal+24]` | outage manufactured by isolation fence |
-| sync02 | sync any/2 + quorum | 0 | 0 | 30% `[cut+0 → promotion+91]` | healthy pattern; zombie 120s |
-| sync03 | sync any/1, 2 nodes | 0 | 0 | 102% `[cut+0 → heal+6]` | structural: no writes without the peer |
-| sync04 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race defanged by quorum + LSN selection |
+| async01 | async, defaults | **~850** | **~130s** | 0% | stays available by acking on two primaries at once |
+| async02 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | loss decided by a restart race at heal; acks never overlap |
+| sync01 | sync any/1 + quorum | 0 | 0 | 37% `[cut+213 → heal+24]` | outage caused by the isolation fence |
+| sync02 | sync any/2 + quorum | 0 | 0 | 30% `[cut+0 → promotion+91]` | promotion restores service mid-fault |
+| sync03 | sync any/1, 2 nodes | 0 | 0 | 102% `[cut+0 → heal+6]` | structural: cannot write without the peer |
+| sync04 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race resolved safely (quorum + most-advanced selection) |
+
+### Read-side anomalies per scenario
+
+Column definitions, in plain words (full definitions in the
+[README](README.md)):
+
+- **Old primary answering after takeover** — how long the deposed primary
+  kept answering clients after the new primary had already started
+  acknowledging writes.
+- **Reads of erased writes** — read operations that observed rows which do
+  not exist after recovery: clients saw data that was later erased.
+- **Cancelled-sync commits** — writes whose synchronous-replication wait was
+  cancelled by a client timeout; PostgreSQL acknowledges them with a warning
+  and only local durability. *Kept* = the row survived recovery; *erased* =
+  it was destroyed.
+
+| Scenario | Old primary answering after takeover | Reads of erased writes | Cancelled-sync commits kept / erased |
+|---|---|---|---|
+| async01 | **~130s** | ~850 over ~3.5 min | 0 / 0 |
+| async02 | none (already stopped at takeover) | ~840 over ~3.5 min | 0 / 0 |
+| sync01 | none (no takeover) | none | 0 / 0 |
+| sync02 | **120s** | ~1600 over ~3m20s | 0 / **20** |
+| sync03 | none (survivor blocked until heal) | ~400 over ~3.5 min | **40 / 10** |
+| sync04 | none | none | 0 / 0 |
 
 Patroni counterpart runs and the cross-stack comparison live in
 [RESULTS-PATRONI.md](RESULTS-PATRONI.md).

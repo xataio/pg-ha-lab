@@ -31,8 +31,22 @@ Config mapping:
 |---|---|---|---|---|
 | async01 | **74** | 0 | 5% `[cut+18 → cut+32]` | offline demotion +18s, election +32s |
 | sync01 | 0 | 0 | **93%** `[cut+22 → heal+2]` | failsafe demotes the safely-serving pair; lone replica can't promote |
-| sync02 | 0 | 0 | **9%** `[cut+0 → cut+28]` | demote +22s, election +28s, no zombie |
+| sync02 | 0 | 0 | **9%** `[cut+0 → cut+28]` | demote +22s, election +28s |
 | sync03 | 0 | 0 | 101% `[cut-0 → heal+3]` | structural, mirrors CNPG |
+
+### Read-side anomalies per scenario
+
+Same column definitions as in [RESULTS.md](RESULTS.md). Patroni's offline
+demotion stops the old primary's PostgreSQL entirely, so "answering after
+takeover" is structurally zero in every cell — itself a notable contrast
+with CNPG's 130s/120s windows.
+
+| Scenario | Old primary answering after takeover | Reads of erased writes | Cancelled-sync commits kept / erased |
+|---|---|---|---|
+| async01 | none (stopped at demotion, cut+18s) | 72 over 18s | 0 / 0 |
+| sync01 | none | none | 0 / 0 |
+| sync02 | none | 88 over 11s | 0 / 4 |
+| sync03 | none | 30 over ~15s | **49 / 3** |
 
 ## async01 @ Patroni — async, primary's node isolated
 
@@ -84,7 +98,8 @@ wins this geometry decisively.**
 ## sync02 @ Patroni — sync 5-node, {leader + replica} trapped
 
 **Measured (n=1):** clean acks froze at the cut instant (needs 2 acks, one
-reachable); the leader demoted offline at ~+22s — **no zombie at all** (vs
+reachable); the leader demoted offline at ~+22s — **the old primary
+answered nothing after takeover** (vs
 CNPG's 120s), only 88 reads-of-erased-writes in an 11s window (vs 1644 over
 200s) and 4 erased cancelled-sync commits. The majority (3 of 4 quorum
 members) elected a new leader at **cut+28s** (vs CNPG's +91s). Zero loss,
@@ -110,8 +125,9 @@ availability split is geometry-dependent and symmetric:
 - **sync, minority-favoring (sync01):** CNPG decisively better (37% vs 93%
   outage) — quorum failover legitimizes the trapped pair; Patroni's
   all-members failsafe kills it.
-- **sync, majority-favoring (sync02):** Patroni better (9% vs 30% outage, no
-  zombie vs 120s) — again fast demotion + fast election vs slow fence.
+- **sync, majority-favoring (sync02):** Patroni better (9% vs 30% outage;
+  old primary silent after takeover vs answering for 120s) — again fast
+  demotion + fast election vs slow fence.
 - **sync, 2-node (sync03):** tie — the config's physics dominates.
 
 Each stack carries one fencing behavior worth improving: CNPG's
