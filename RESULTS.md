@@ -6,10 +6,6 @@ scenario. All faults are full pairwise cuts (node IPs + pod CIDRs) held for
 (partition removed). See the [README](README.md) for invariants and
 terminology; raw evidence for every run lives in `results/<run-id>/`.
 
-Scenarios were renamed on 2026-08-23; run directories from before then carry
-the old names: s01→async01, s05→async02, s02→sync01, s03→sync02,
-s04→sync03, s06→sync04.
-
 ## Summary
 
 | Scenario | Config | Lost clean acks | Dual-ack overlap | Write outage (% of fault) | Notes |
@@ -23,14 +19,17 @@ s04→sync03, s06→sync04.
 
 ### Read-side anomalies per scenario
 
-Column definitions, in plain words (full definitions in the
-[README](README.md)):
+Column definitions (full definitions in the [README](README.md)):
 
-- **Old primary answering after takeover** — how long the deposed primary
+- **Old primary answering after takeover** — how long the old primary
   kept answering clients after the new primary had already started
   acknowledging writes.
 - **Reads of erased writes** — read operations that observed rows which do
-  not exist after recovery: clients saw data that was later erased.
+  not exist after recovery. These rows were committed locally on the losing
+  side of the partition but never reached the node that was later promoted;
+  when the partition healed, the losing nodes were rewound onto the new
+  primary's history (`pg_rewind`) and those rows were discarded. Clients saw
+  data that was made retroactively false.
 - **Cancelled-sync commits** — writes whose synchronous-replication wait was
   cancelled by a client timeout; PostgreSQL acknowledges them with a warning
   and only local durability. *Kept* = the row survived recovery; *erased* =
