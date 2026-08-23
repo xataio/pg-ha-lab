@@ -1,6 +1,6 @@
 # pg-ha-lab
 
-A Jepsen-style torture lab for PostgreSQL HA operators on Kubernetes.
+A Jepsen-style lab for PostgreSQL HA operators on Kubernetes.
 
 **Measured results, per-scenario diagrams and findings: [RESULTS.md](RESULTS.md)
 (CNPG) and [RESULTS-PATRONI.md](RESULTS-PATRONI.md) (Patroni + cross-stack
@@ -9,14 +9,7 @@ comparison).**
 The lab injects network partitions (and other faults) into a kind cluster
 running a managed PostgreSQL setup, drives client workloads from *inside* each
 partition, records a full operation history, and checks invariants after the
-fault heals. It is **not** built to prove a predetermined point about any
-stack: the checker asserts a small set of invariants, everything else is
-measured and reported neutrally so trade-offs (availability vs. consistency
-posture, anomaly-window durations) emerge from data.
-
-Current target: **CloudNativePG**. The stack interface is deliberately thin so
-Patroni (and others) can be added later for side-by-side comparison — see
-`stacks/patroni/README.md`.
+fault heals. 
 
 ## Invariants checked
 
@@ -26,7 +19,7 @@ Patroni (and others) can be added later for side-by-side comparison — see
 2. **Single acker** — no two servers may acknowledge clean writes
    concurrently (checked from history overlap per server identity).
 
-Everything else is *measured*, not judged:
+Other properties are measured:
 
 - cancelled-sync commits: `COMMIT` successes carrying the "already committed
   locally" warning after a cancelled sync-replication wait — acknowledged to
@@ -46,7 +39,7 @@ Everything else is *measured*, not judged:
 ```
 kind/            kind cluster topology (1 control-plane + 5 workers)
 stacks/cnpg/     CNPG install, cluster configs (the test matrix), adapter lib
-stacks/patroni/  placeholder + adapter contract for future comparison
+stacks/patroni/  Patroni (Spilo) stack: cluster configs + adapter
 nemesis/         fault injectors: pairwise iptables partitions, pauses
 harness/client/  Go workload client (clean writer / cancel writer / reader)
 scenarios/       runnable end-to-end scenarios (deploy → fault → heal → check)
@@ -70,14 +63,15 @@ results/         one directory per run (gitignored)
 make cluster-up          # kind cluster (6 nodes)
 make cnpg-install        # pinned CNPG operator
 make client-image        # build + load the workload client image
-make run SCENARIO=s01-async-baseline    # reproduce the known async loss (harness validation)
-make run SCENARIO=s02-sync-q-asym-3     # 3-node asymmetric partition, strongest config
-make run SCENARIO=s03-sync-q-asym-5     # 5-node asymmetric partition, strongest config
+make run SCENARIO=async01-baseline    # reproduce the known async loss (harness validation)
+make run SCENARIO=sync01-asym-3     # 3-node asymmetric partition, strongest config
+make run SCENARIO=sync02-asym-5     # 5-node asymmetric partition, strongest config
+LAB_STACK=patroni make run SCENARIO=async01-baseline   # same scenario against Patroni
 make check RUN=results/<run-id>         # (re-)run the checker on a collected run
 make cluster-down
 ```
 
-`s01` doubles as harness validation: it must detect lost acknowledged writes
+`async01` doubles as harness validation: it must detect lost acknowledged writes
 on the async baseline (the original cloudnative-pg#7407 behavior). A checker
 that has never seen a positive proves nothing.
 

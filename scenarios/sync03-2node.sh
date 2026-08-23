@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# s01: harness validation on the async baseline (the cloudnative-pg#7407
-# geometry). Fully isolate the primary's node; clients on that node keep
-# writing to the old primary through stale routing while a replica is
-# promoted outside. EXPECTED: lost acknowledged writes detected — the
-# checker must flag them, or the harness cannot be trusted.
+# sync03: two-node sync any/1 + quorum, primary's node fully isolated.
+# EXPECTED: zero clean-ack loss (the survivor holds every acked commit, so
+# promotion is always safe); zero write availability on BOTH sides — the
+# minority's commits hang from t0, and the promoted survivor's commits hang
+# until the old primary rejoins as its replica (measure recovery beyond
+# heal). Pseudo-acks expected on both sides: LOST on the minority (erased
+# timeline), SURVIVED on the promoted side (winning timeline). Doomed reads
+# expected on the minority until the isolation fence completes.
 set -euo pipefail
 source "$(dirname "$0")/lib/common.sh"
 
 HOLD="${HOLD:-300}"
-scenario::init s01-async-baseline
+scenario::init sync03-2node
 
 stack::destroy || true
-stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/async-3.yaml"
+stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/sync-q-2.yaml"
 scenario::start_clients
 
 echo ">> baseline for 60s"

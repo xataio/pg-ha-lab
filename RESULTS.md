@@ -6,16 +6,20 @@ scenario. All faults are full pairwise cuts (node IPs + pod CIDRs) held for
 (partition removed). See the [README](README.md) for invariants and
 terminology; raw evidence for every run lives in `results/<run-id>/`.
 
+Scenarios were renamed on 2026-08-23; run directories from before then carry
+the old names: s01→async01, s05→async02, s02→sync01, s03→sync02,
+s04→sync03, s06→sync04.
+
 ## Summary
 
 | Scenario | Config | Lost clean acks | Dual-ack overlap | Write outage (% of fault) | Notes |
 |---|---|---|---|---|---|
-| s01 | async, defaults | **~850** | **~130s** | 0% | availability preserved via split-brain |
-| s02 | sync any/1 + quorum | 0 | 0 | 37% `[cut+213 → heal+24]` | outage manufactured by isolation fence |
-| s03 | sync any/2 + quorum | 0 | 0 | 30% `[cut+0 → promotion+91]` | healthy pattern; zombie 120s |
-| s04 | sync any/1, 2 nodes | 0 | 0 | 102% `[cut+0 → heal+6]` | structural: no writes without the peer |
-| s05 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | heal-time race; loss without split-brain |
-| s06 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race defanged by quorum + LSN selection |
+| async01 | async, defaults | **~850** | **~130s** | 0% | availability preserved via split-brain |
+| async02 | async, operator trapped | **~840 in 5/7 runs** | 0 | 38% `[cut+210 → heal+24]` | heal-time race; loss without split-brain |
+| sync01 | sync any/1 + quorum | 0 | 0 | 37% `[cut+213 → heal+24]` | outage manufactured by isolation fence |
+| sync02 | sync any/2 + quorum | 0 | 0 | 30% `[cut+0 → promotion+91]` | healthy pattern; zombie 120s |
+| sync03 | sync any/1, 2 nodes | 0 | 0 | 102% `[cut+0 → heal+6]` | structural: no writes without the peer |
+| sync04 | sync any/1 + quorum, operator trapped | 0 | 0 | 32–36% `[cut+207 → heal+4..16]` | heal race defanged by quorum + LSN selection |
 
 Patroni counterpart runs and the cross-stack comparison live in
 [RESULTS-PATRONI.md](RESULTS-PATRONI.md).
@@ -27,7 +31,7 @@ at ~cut+70..91s.
 
 ---
 
-## s01 — async baseline, primary isolated
+## async01 — async baseline, primary isolated
 
 Config: `instances: 3`, no synchronous replication (the CNPG default and the
 original [cloudnative-pg#7407](https://github.com/cloudnative-pg/cloudnative-pg/issues/7407)
@@ -63,7 +67,44 @@ and this geometry would have no dual-ack window at all.
 
 ---
 
-## s02 — sync + quorum, primary and its sync standby trapped together
+## async02 — async, operator trapped with the primary
+
+Config: as async01, but the (single-replica) operator is re-pinned onto the
+primary's node before the cut. Identical fault to async01; the only variable is
+operator placement.
+
+```mermaid
+flowchart LR
+    subgraph iso["⚡ isolated zone"]
+        P[("pglab-1<br/>PRIMARY")]
+        OP["operator<br/>(cannot reach API)"]
+        CA["clients"]
+        CA -->|"acked until fence (cut+210s)"| P
+    end
+    subgraph maj["majority zone"]
+        CP["control plane<br/>API server (no operator!)"]
+        R1[("replica")]
+        R2[("replica")]
+    end
+    OP -. ✗ API .- CP
+    P -. ✗ .- R1
+    P -. ✗ .- CP
+```
+
+**Measured (n=7):** no promotion during the fault — automated recovery is
+lost; the majority zone has replicas and an API server but no decision-maker.
+The primary's zone is served until the fence (cut+210s), then total outage.
+**The durability outcome is decided by a race at heal**: the returning
+operator re-acquires leadership at ~heal+8s and promotes a stale replica at
+~heal+24s, unless the fenced old primary's `wait-for-get-cluster` retry
+happens to fire first and it resumes. Observed: **writes lost in 5/7 runs
+(~840 each), survived in 2/7** — acked-write loss *without any dual-ack*,
+via promote-past-unreachable-writes after the network is healthy again.
+`.spec.failoverDelay` (default 0) would tilt this race toward survival.
+
+---
+
+## sync01 — sync + quorum, primary and its sync standby trapped together
 
 Config: `instances: 3`, `synchronous: {method: any, number: 1,
 dataDurability: required, failoverQuorum: true}`.
@@ -96,7 +137,7 @@ semantics**. On heal the same primary resumed; nothing was rewound.
 
 ---
 
-## s03 — sync + quorum, 5 nodes, primary and one replica trapped
+## sync02 — sync + quorum, 5 nodes, primary and one replica trapped
 
 Config: `instances: 5`, `synchronous: {method: any, number: 2,
 dataDurability: required, failoverQuorum: true}`.
@@ -133,7 +174,7 @@ zone observes ~1600 reads of erased writes.
 
 ---
 
-## s04 — sync, two nodes, primary isolated
+## sync03 — sync, two nodes, primary isolated
 
 Config: `instances: 2`, `synchronous: {method: any, number: 1,
 dataDurability: required, failoverQuorum: true}`.
@@ -166,47 +207,10 @@ side (10).
 
 ---
 
-## s05 — async, operator trapped with the primary
+## sync04 — sync + quorum, operator trapped with the primary
 
-Config: as s01, but the (single-replica) operator is re-pinned onto the
-primary's node before the cut. Identical fault to s01; the only variable is
-operator placement.
-
-```mermaid
-flowchart LR
-    subgraph iso["⚡ isolated zone"]
-        P[("pglab-1<br/>PRIMARY")]
-        OP["operator<br/>(cannot reach API)"]
-        CA["clients"]
-        CA -->|"acked until fence (cut+210s)"| P
-    end
-    subgraph maj["majority zone"]
-        CP["control plane<br/>API server (no operator!)"]
-        R1[("replica")]
-        R2[("replica")]
-    end
-    OP -. ✗ API .- CP
-    P -. ✗ .- R1
-    P -. ✗ .- CP
-```
-
-**Measured (n=7):** no promotion during the fault — automated recovery is
-lost; the majority zone has replicas and an API server but no decision-maker.
-The primary's zone is served until the fence (cut+210s), then total outage.
-**The durability outcome is decided by a race at heal**: the returning
-operator re-acquires leadership at ~heal+8s and promotes a stale replica at
-~heal+24s, unless the fenced old primary's `wait-for-get-cluster` retry
-happens to fire first and it resumes. Observed: **writes lost in 5/7 runs
-(~840 each), survived in 2/7** — acked-write loss *without any dual-ack*,
-via promote-past-unreachable-writes after the network is healthy again.
-`.spec.failoverDelay` (default 0) would tilt this race toward survival.
-
----
-
-## s06 — sync + quorum, operator trapped with the primary
-
-Config and fault: as s02, with the s05 twist — the single-replica operator
-re-pinned onto the primary's node before the cut. Tests whether the s05
+Config and fault: as sync01, with the async02 twist — the single-replica operator
+re-pinned onto the primary's node before the cut. Tests whether the async02
 heal-time race can lose acked writes when sync replication + failoverQuorum
 are in play.
 
@@ -228,12 +232,12 @@ flowchart LR
 ```
 
 **Measured (n=4): zero loss in every run.** During the fault: identical to
-s02 (no promotion, fence at cut+207s). At heal the race went both ways —
+sync01 (no promotion, fence at cut+207s). At heal the race went both ways —
 the primary resumed first in 3/4 runs (heal+4..5s); in 1/4 the returning
 operator won and **promoted at heal+16s, choosing the trapped sync standby**
 (most-advanced reachable, holding every acked commit) rather than the stale
 replica: zero acked writes lost, at the cost of ~11s extra outage and a
-rewind of the old primary's unacked tail. The s05 loss mechanism is
+rewind of the old primary's unacked tail. The async02 loss mechanism is
 defanged by sync+quorum: the quorum gate cannot pass against a partial
 post-heal view, and LSN-ordered candidate selection picks the node that
 acked. The heal-time race is therefore an async-only durability hazard.
@@ -245,8 +249,8 @@ acked. The heal-time race is therefore an async-only durability hazard.
 1. **`smartShutdownTimeout` blunts every fencing path.** The isolation-check
    SIGTERM arrives at ~+30s as documented, but the termination path runs a
    *smart* shutdown (180s default) that only blocks new connections;
-   established sessions keep writing (s01: the entire dual-ack window and all
-   lost acks), reading, and minting cancelled-sync commits (s02–s05).
+   established sessions keep writing (async01: the entire dual-ack window and all
+   lost acks), reading, and minting cancelled-sync commits (sync01–async02).
    Effective fence latency is ~210s vs the documented "~30s". The instance
    manager knows its own isolation state, so "fast shutdown when fencing" is
    a plausible fix; lowering `.spec.smartShutdownTimeout` is the available
@@ -255,14 +259,14 @@ acked. The heal-time race is therefore an async-only durability hazard.
    primary "cannot reach **any** other instance". Code
    (`pinger.go ensureInstancesAreReachable`): fence unless it can reach
    **every** instance (first unreachable peer fails the probe). Behavioral
-   consequence measured in s02: an API-isolated primary with a healthy,
+   consequence measured in sync01: an API-isolated primary with a healthy,
    acking sync standby gets fenced, converting a safe, quorum-protected
    partition into a 37% outage.
-3. **The heal-time race (s05).** After a partition in which no failover
+3. **The heal-time race (async02).** After a partition in which no failover
    could run, the operator promotes a stale replica within seconds of
    regaining API access, racing the fenced primary's restart — losing acked
    writes ~2/3 of the time in our environment, without split-brain. A grace
    period for a returning `targetPrimary` (or `failoverDelay` applying at
-   heal) would close it. s06 shows sync + `failoverQuorum` defangs the same
+   heal) would close it. sync04 shows sync + `failoverQuorum` defangs the same
    race (n=4, zero loss, including one run where the operator won and
    correctly promoted the sync standby) — the hazard is async-only.

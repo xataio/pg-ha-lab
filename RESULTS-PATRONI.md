@@ -29,12 +29,12 @@ Config mapping:
 
 | Scenario | Lost clean acks | Dual-ack | Write outage (% of fault) | Notes |
 |---|---|---|---|---|
-| s01 async | **74** | 0 | 5% `[cut+18 → cut+32]` | offline demotion +18s, election +32s |
-| s02 sync-q-3 | 0 | 0 | **93%** `[cut+22 → heal+2]` | failsafe demotes the safely-serving pair; lone replica can't promote |
-| s03 sync-q-5 | 0 | 0 | **9%** `[cut+0 → cut+28]` | demote +22s, election +28s, no zombie |
-| s04 sync-q-2 | 0 | 0 | 101% `[cut-0 → heal+3]` | structural, mirrors CNPG |
+| async01 | **74** | 0 | 5% `[cut+18 → cut+32]` | offline demotion +18s, election +32s |
+| sync01 | 0 | 0 | **93%** `[cut+22 → heal+2]` | failsafe demotes the safely-serving pair; lone replica can't promote |
+| sync02 | 0 | 0 | **9%** `[cut+0 → cut+28]` | demote +22s, election +28s, no zombie |
+| sync03 | 0 | 0 | 101% `[cut-0 → heal+3]` | structural, mirrors CNPG |
 
-## s01 @ Patroni — async, primary's node isolated
+## async01 @ Patroni — async, primary's node isolated
 
 **Measured (n=1):** on losing the DCS, the trapped leader logged *"demoting
 self because DCS is not accessible and I was a leader"* at **cut+18s** and
@@ -68,7 +68,7 @@ Patroni dominates every anomaly column of the async cell, at the price of a
   availability cost this scenario does not exercise; the sync/failsafe
   cells below are where that bill arrives.
 
-## s02 @ Patroni — sync, {leader + sync standby} trapped: the inversion cell
+## sync01 @ Patroni — sync, {leader + sync standby} trapped: the inversion cell
 
 **Measured (n=1):** the trapped leader kept acking cleanly (via its sync
 standby) for only **22s** — then the failsafe, which requires reaching
@@ -81,7 +81,7 @@ CNPG: 37% outage (served safely until its fence at +213s), and 0% under
 CNPG's documented fencing semantics. **CNPG's quorum-legitimized minority
 wins this geometry decisively.**
 
-## s03 @ Patroni — sync 5-node, {leader + replica} trapped
+## sync02 @ Patroni — sync 5-node, {leader + replica} trapped
 
 **Measured (n=1):** clean acks froze at the cut instant (needs 2 acks, one
 reachable); the leader demoted offline at ~+22s — **no zombie at all** (vs
@@ -91,7 +91,7 @@ members) elected a new leader at **cut+28s** (vs CNPG's +91s). Zero loss,
 **9% outage** (vs 30%). **Patroni wins the majority-favoring geometry** on
 both speed and hygiene.
 
-## s04 @ Patroni — sync 2-node, leader isolated
+## sync03 @ Patroni — sync 2-node, leader isolated
 
 **Measured (n=1):** structural mirror of CNPG's cell: acks froze at cut+0,
 leader demoted offline ~+20s, the surviving standby (the whole sync set)
@@ -107,14 +107,14 @@ availability split is geometry-dependent and symmetric:
 
 - **async:** Patroni decisively better (74 vs ~850 lost acks, 0 vs ~130s
   dual-ack) — fast self-demotion beats slow fencing.
-- **sync, minority-favoring (s02):** CNPG decisively better (37% vs 93%
+- **sync, minority-favoring (sync01):** CNPG decisively better (37% vs 93%
   outage) — quorum failover legitimizes the trapped pair; Patroni's
   all-members failsafe kills it.
-- **sync, majority-favoring (s03):** Patroni better (9% vs 30% outage, no
+- **sync, majority-favoring (sync02):** Patroni better (9% vs 30% outage, no
   zombie vs 120s) — again fast demotion + fast election vs slow fence.
-- **sync, 2-node (s04):** tie — the config's physics dominates.
+- **sync, 2-node (sync03):** tie — the config's physics dominates.
 
 Each stack carries one fencing behavior worth improving: CNPG's
 `smartShutdownTimeout` grace + all-peers isolation check (most of its
-deficit in s01/s03), Patroni's all-members failsafe (all of its deficit in
-s02).
+deficit in async01/sync02), Patroni's all-members failsafe (all of its deficit in
+sync01).

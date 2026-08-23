@@ -2,7 +2,7 @@ KIND_NAME    ?= pg-ha-lab
 NS           ?= pglab
 CNPG_VERSION ?= 1.30.0
 CLIENT_IMAGE ?= pg-ha-lab-client:dev
-SCENARIO     ?= s01-async-baseline
+SCENARIO     ?= async01-baseline
 
 # The lab lives on its own kubeconfig so it neither depends on nor touches
 # the user's current kubectl context (which may point at real clusters).

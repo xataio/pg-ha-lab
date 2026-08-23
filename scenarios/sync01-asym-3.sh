@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# s03: strongest 5-node config (sync any/2 + failoverQuorum), asymmetric
-# partition: {primary node, one replica node} | {3 replicas + control plane}.
-# EXPECTED (design): clean acks on the old primary stop immediately (it
-# cannot assemble 2 acks); the majority side promotes (R=3,W=2,N=4); the
-# old primary remains an unfenced zombie until heal (window measured);
-# zero clean-ack loss; pseudo-acks/doomed reads possible on the trapped side.
+# sync01: strongest 3-node config (sync any/1 + failoverQuorum), asymmetric
+# partition: {primary node, one replica node} | {rest + control plane}.
+# EXPECTED (design): no promotion (R=1,W=1,N=2 fails R+W>N); the trapped
+# pair keeps serving cleanly and safely; zero clean-ack loss. Availability
+# on the majority side drops to zero — measured, not judged.
 set -euo pipefail
 source "$(dirname "$0")/lib/common.sh"
 
 HOLD="${HOLD:-300}"
-scenario::init s03-sync-q-asym-5
+scenario::init sync01-asym-3
 
 stack::destroy || true
-stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/sync-q-5.yaml"
+stack::deploy "$ROOT/stacks/$LAB_STACK/clusters/sync-q-3.yaml"
 scenario::start_clients
 
 echo ">> baseline for 60s"
