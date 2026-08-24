@@ -48,13 +48,14 @@ type record struct {
 }
 
 var (
-	mode        = flag.String("mode", "clean", "clean | cancel | read")
+	mode        = flag.String("mode", "clean", "clean | cancel | disconnect | read")
 	host        = flag.String("host", "", "server host (service DNS or pod IP)")
 	port        = flag.Int("port", 5432, "server port")
 	clientID    = flag.String("client", "c1", "client id (unique per pod)")
 	interval    = flag.Duration("interval", 500*time.Millisecond, "pause between ops")
 	opTimeout   = flag.Duration("op-timeout", 20*time.Second, "clean mode: wall time before an op is declared indeterminate")
 	cancelAfter = flag.Duration("cancel-after", 5*time.Second, "cancel mode: time before sending a cancel request")
+	dropAfter   = flag.Duration("disconnect-after", 300*time.Millisecond, "disconnect mode: time before hard-closing the TCP connection")
 )
 
 var outMu sync.Mutex
@@ -132,7 +133,17 @@ type opResult struct {
 	err    error
 }
 
-func runWriter(cancelMode bool) {
+// runWriter drives one of the writer modes:
+//
+//	clean      - never interferes with an in-flight commit
+//	cancel     - driver-style cancel request after -cancel-after
+//	disconnect - the client "crashes": hard TCP close (no cancel, no
+//	             Terminate message) after -disconnect-after. This is the
+//	             trigger from Bin Wang's Patroni Jepsen analysis: the commit
+//	             keeps waiting server-side with nobody left to answer, and
+//	             may become visible (and later be erased) without ever being
+//	             acknowledged to anyone.
+func runWriter(writerMode string) {
 	ctx := context.Background()
 	box := &noticeBox{}
 	ensureTable(ctx, box)
@@ -167,7 +178,21 @@ func runWriter(cancelMode bool) {
 			done <- opResult{server: sv, err: err}
 		}(conn)
 
-		if cancelMode {
+		switch writerMode {
+		case "disconnect":
+			select {
+			case r := <-done:
+				logWrite(s, r, box, start, false)
+			case <-time.After(*dropAfter):
+				// client vanishes mid-commit: abrupt TCP close, nothing sent
+				_ = conn.PgConn().Conn().Close()
+				emit(record{Client: *clientID, Mode: *mode, Op: "write", Seq: &s,
+					Result: "info", Err: "connection hard-closed by client during commit",
+					Ms: ms(start)})
+				go waitLate(s, done, box, start)
+				conn = nil
+			}
+		case "cancel":
 			select {
 			case r := <-done:
 				logWrite(s, r, box, start, false)
@@ -185,7 +210,7 @@ func runWriter(cancelMode bool) {
 					conn = nil
 				}
 			}
-		} else {
+		default: // clean
 			select {
 			case r := <-done:
 				logWrite(s, r, box, start, false)
@@ -340,10 +365,8 @@ func main() {
 	emit(record{Client: *clientID, Mode: *mode, Op: "start", Result: "ok",
 		Server: fmt.Sprintf("%s:%d", *host, *port)})
 	switch *mode {
-	case "clean":
-		runWriter(false)
-	case "cancel":
-		runWriter(true)
+	case "clean", "cancel", "disconnect":
+		runWriter(*mode)
 	case "read":
 		runReader()
 	default:

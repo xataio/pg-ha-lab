@@ -208,6 +208,16 @@ def main(run_dir):
     print(f"   cancelled-sync commits (acked with warning, local-only durability; "
           f"PG-inherent): kept {len(kept_warn)}, erased {len(lost_warn)}")
     print(f"   indeterminate writes: kept {len(kept_info)}, erased {len(lost_info)}")
+    disc = [w for w in writes if w.get("mode") == "disconnect" and w.get("result") == "info"]
+    if disc:
+        kept_d = [w for w in disc if wid(w) in final_ids]
+        lost_d = [w for w in disc if final_ids and wid(w) not in final_ids]
+        # were any of these client-abandoned commits observed by readers?
+        seen_d = {(c, h) for _, _, _, c, h in doomed_reads
+                  if any(w["client"] == c and w["seq"] == h for w in lost_d)}
+        print(f"   client-disconnected commits (TCP closed mid-wait, never acked to anyone): "
+              f"kept {len(kept_d)}, erased {len(lost_d)}, "
+              f"erased-after-being-read {len(seen_d)}")
     if availability_gaps:
         fault_len = None
         if "partition_apply" in anchors and "partition_heal" in anchors:

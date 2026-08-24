@@ -41,7 +41,7 @@ kind/            kind cluster topology (1 control-plane + 5 workers)
 stacks/cnpg/     CNPG install, cluster configs (the test matrix), adapter lib
 stacks/patroni/  Patroni (Spilo) stack: cluster configs + adapter
 nemesis/         fault injectors: pairwise iptables partitions, pauses
-harness/client/  Go workload client (clean writer / cancel writer / reader)
+harness/client/  Go workload client (clean / cancel / disconnect writers, reader)
 scenarios/       runnable end-to-end scenarios (deploy → fault → heal → check)
 checker/         history + final-state invariant checker and report
 results/         one directory per run (gitignored)

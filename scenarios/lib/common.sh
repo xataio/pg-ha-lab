@@ -75,7 +75,7 @@ scenario::start_clients() {
   while read -r pod node _role; do
     [[ -n "$pod" ]] || continue
     local short; short=$(node_short "$node")
-    for m in clean cancel read; do
+    for m in clean cancel disconnect read; do
       client_pod_manifest "$m" "$short" "$node" "$host" "$secret"
     done | kubectl -n "$NS" apply -f -
   done < <(stack::instances)

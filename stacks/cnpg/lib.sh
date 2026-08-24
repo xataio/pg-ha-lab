@@ -7,8 +7,13 @@ CLUSTER="${CLUSTER:-pglab}"
 
 # Deploy a cluster config and wait until it is healthy.
 stack::deploy() { # <path-to-cluster-yaml>
-  # cross-stack guard: a leftover Patroni statefulset would collide on names
+  # cross-stack guard: leftover Patroni resources collide on names —
+  # unlike CNPG's (owner-ref'd to the Cluster), they need explicit teardown
   kubectl -n "$NS" delete sts "$CLUSTER" --ignore-not-found --wait=true 2>/dev/null || true
+  kubectl -n "$NS" delete svc "${CLUSTER}-rw" "${CLUSTER}-headless" --ignore-not-found 2>/dev/null || true
+  kubectl -n "$NS" delete pvc,cm -l cluster-name="$CLUSTER" --ignore-not-found 2>/dev/null || true
+  kubectl -n "$NS" delete secret "${CLUSTER}-app" --ignore-not-found 2>/dev/null || true
+  kubectl -n "$NS" delete sa,role,rolebinding "${CLUSTER}-patroni" --ignore-not-found 2>/dev/null || true
   kubectl -n "$NS" apply -f "$1"
   stack::wait_healthy 600
 }

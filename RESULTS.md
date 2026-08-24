@@ -187,13 +187,28 @@ flowchart LR
     P -. ✗ .- CP
 ```
 
-**Measured (n=2):** the strongest config's headline — **zero clean-ack loss,
+**Measured (n=3):** the strongest config's headline — **zero clean-ack loss,
 zero dual-ack**. Clean acks freeze at the cut instant (write quorum
-unreachable); quorum-approved promotion restores service at cut+91s (outage
-30% of fault). Costs are visibility-side: the fenced old primary answers
-reads for **120s** after takeover (deterministic: promotion ~+85s → fence
-effective ~+205s), mints ~20 cancelled-sync commits (all erased), and its
-zone observes ~1600 reads of erased writes.
+unreachable); quorum-approved promotion restores service at cut+80..91s
+(outage ~30% of fault). Costs are visibility-side: the fenced old primary
+answers reads for **120–125s** after takeover (deterministic: promotion
+~+80–85s → fence effective ~+205s), mints ~20 cancelled-sync commits (all
+erased), and its zone observes 1600–3200 reads of erased writes.
+
+**The disconnect trigger (client crash mid-commit), measured in run 3:** a
+writer that hard-closes its TCP connection 300ms into a hanging commit —
+no cancel request, nothing sent — had its rows become **visible to other
+sessions within ~0.5s of the close**: an abrupt disconnect alone releases
+PostgreSQL's synchronous-commit wait and completes the commit locally,
+acknowledged to nobody. Two such rows were read by other clients and later
+erased. The asymmetry proves the mechanism: disconnects from *across* the
+partition (whose FIN/RST packets the cut swallowed) did **not** publish
+their rows — those backends waited obliviously until the fence terminated
+them. So the interrupted-sync-wait channel has three measured entrances:
+cancel (visible + success-with-warning to the canceller), disconnect
+(visible in ~0.5s, acknowledged to no one — an ordinary client crash or
+pool timeout suffices), and termination (committed at kill time, typically
+never readable because the server is stopping).
 
 ---
 
